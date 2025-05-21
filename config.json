@@ -1,0 +1,44 @@
+{
+    "ollama": {
+      "fallback_api_url": "http://localhost:11434/api/generate",
+      "model": "gemma3:27b",
+      "timeout": 180,
+      "auto_detect": true
+    },
+    "pdf_processing": {
+      "pages_to_process": {
+        "mode": "all",
+        "first_n": 0,
+        "range": [1, 1],
+        "always_include_first": true
+      },
+      "support_pages": 3,
+      "image_scale": 2.0
+    },
+    "output": {
+      "csv_filename": "author_extraction_results.csv"
+    },
+    "features": {
+      "document_type_detection": true,
+      "institution_detection": true,
+      "email_validation": true,
+      "prioritize_first_page": true,
+      "metadata_filtering": true
+    },
+    "metadata": {
+      "csv_path": "/N/project/fads_ng/analyst_reports_project/data/reports_metadata.csv",
+      "skip_terms": ["termination", "dropping", "terminate", "drop coverage"],
+      "id_extraction_pattern": "key_(\\d+)"
+    },
+    "debug": {
+      "enabled": false
+    },
+    "prompts": {
+      "compilation_report": "Analyze this document image (page {page_num_display} of {total_pages_in_doc}) to identify only the TRUE AUTHORS of the research report sections.\n\nGuidelines:\n- {institution_specific}{first_page_emphasis}\n- This appears to be a COMPILATION REPORT with different authors for each section\n- Focus on \"Analyst: [Name]\" format which indicates the true author\n- Look for section headers followed by \"Analyst: [Name], [Credentials]\" pattern\n- Include credentials like CFA, PhD as part of the name field, NOT title\n- Extract ONLY people explicitly identified as authors or analysts \n- DO NOT include names of people who are just mentioned in the content\n- DO NOT include names from the \"COMPANIES MENTIONED\" section\n- DO NOT include names from the \"ANALYST CERTIFICATION\" section\n- DO NOT include document metadata like \"WELLS FARGO SECURITIES, LLC\" or \"EQUITY RESEARCH\"\n- DO NOT include names from reference lists or citations\n- DO NOT include department names like \"Credit Suisse US Eq. Res\" as authors\n\nHere's some supporting text from the document that may help identify authors:\n{supporting_text}\n\nExtract and return your findings as valid JSON in the following structure:\n{{\n\"authors\": [\n    {{\n    \"name\": \"Full Name WITH credentials (e.g., 'David Wong, CFA, PhD')\",\n    \"title\": \"Professional title if available\",\n    \"email\": \"Email address if explicitly shown\"\n    }},\n    ... (additional authors)\n]\n}}",
+      "standard_report": "Analyze this document image (page {page_num_display} of {total_pages_in_doc}) to identify only the true authors of the document.\n\nGuidelines:\n- {institution_specific}{first_page_emphasis}\n- {termination_specific}\n- Authors almost always appear at the TOP of the FIRST PAGE of financial research reports\n- In financial reports, there are typically only 1-3 actual authors \n- Look for names followed by titles like \"Analyst\" or \"Associate\" at the top of the document\n- Some institutions (like Credit Suisse) use format: \"Name / Title / Phone / Email\"\n- Extract the EXACT spelling of author names WITH their credentials\n- Extract professional titles if available (like \"Analyst\" or \"Associate\")\n- Extract email addresses if shown\n- DO NOT include names from the \"COMPANIES MENTIONED\" section\n- DO NOT include names from the \"ANALYST CERTIFICATION\" section \n- DO NOT include analysts cited or quoted within the report content\n- DO NOT include document metadata like company address or phone number\n- DO NOT include \"Little Rock\" or other location information as authors\n- DO NOT include department names like \"Credit Suisse US Eq. Res\" as authors\n- DO NOT include generic attributions like \"Research Analysts\" or \"Equity Research\"\n- An author must be a PERSON with both first and last name, not a department or company\n\nHere's some supporting text from the document that may help identify authors:\n{supporting_text}\n\nExtract and return your findings as valid JSON in the following structure:\n{{\n\"authors\": [\n    {{\n    \"name\": \"Full Name WITH credentials (e.g., 'John Campbell')\",\n    \"title\": \"Professional title if available (e.g., 'Analyst')\",\n    \"email\": \"Email address if explicitly shown (e.g., 'john.campbell@stephens.com')\"\n    }},\n    ... (additional authors)\n]\n}}",
+      "credit_suisse_specific": "This is a Credit Suisse research report. Credit Suisse often formats author information like:\n\"Thompson Wu / Research Analyst / 886 2 2715 6386 / thompson.wu@credit-suisse.com\"\nLook for this pattern at the top of the document.",
+      "first_page_emphasis": "THIS IS THE FIRST PAGE where authors typically appear at the very top. Focus on the top section only.",
+      "termination_specific": "This appears to be a termination of coverage report which may not have individual analysts assigned. \nLook for both individual authors and also department attributions like 'Credit Suisse US Eq. Res'.\nReturn an empty authors array if you only find departmental attributions rather than specific individuals.\nIMPORTANT: Research departments like 'Credit Suisse US Eq. Res' are NOT individual authors."
+    }
+  }
+  
