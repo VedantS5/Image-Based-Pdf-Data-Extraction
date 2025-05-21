@@ -20,7 +20,7 @@ On the server, the project is located at:
 The main components are:
 ```
 /N/project/fads_ng/analyst_reports_project/codes/02/image_based/02_image.py
-/N/project/fads_ng/analyst_reports_project/codes/02/ollama_server_deployment.sh  # In parent directory
+/N/project/fads_ng/analyst_reports_project/codes/02/image_based/ollama_server_deployment.sh
 /N/project/fads_ng/analyst_reports_project/codes/02/image_based/config.json
 ```
 
@@ -82,8 +82,8 @@ Prerequisites:
 First, deploy one or more Ollama instances using the deployment script:
 
 ```bash
-# Navigate to the parent directory where the deployment script is located
-cd /N/project/fads_ng/analyst_reports_project/codes/02/
+# Navigate to the directory where the deployment script is located
+cd /N/project/fads_ng/analyst_reports_project/codes/02/image_based/
 
 # For image processing with 4 GPUs (recommended)
 ./ollama_server_deployment.sh image
