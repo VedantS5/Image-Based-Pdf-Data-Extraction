@@ -1,8 +1,15 @@
-# PDF Author Extraction Tool
+# Analyst Report Vision
+
+[![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+
+Extract author metadata from PDF analyst reports using multimodal LLMs and image processing. Handles complex document layouts with parallel GPU acceleration.
 
 This tool extracts author information from PDF research reports using Ollama and large language models with image processing capabilities. It's designed to handle a variety of research report formats and automatically identify authors, their titles, and contact information.
 
 ## Overview
+
+This specialized tool extracts author information from financial analyst reports using multimodal LLMs with image processing capabilities. It processes PDF documents as images to identify authors, titles, contact information, and report metadata even when text extraction fails.
 
 The system consists of three main components:
 
