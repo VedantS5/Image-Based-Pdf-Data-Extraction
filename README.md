@@ -17,19 +17,31 @@ The system consists of three main components:
 2. **ollama_server_deployment.sh**: Shell script to deploy Ollama instances across available GPUs
 3. **config.json**: Configuration file for customizing the behavior of the extraction tool
 
-## Project Location
+## Installation
 
-On the server, the project is located at:
-```
-/N/project/fads_ng/analyst_reports_project/codes/02/image_based/
+```bash
+# Clone the repository
+git clone https://github.com/VedantS5/analyst-report-vision.git
+cd analyst-report-vision
+
+# Install dependencies
+pip install -r requirements.txt
 ```
 
-The main components are:
+## Project Structure
+
+The repository contains these main components:
+
 ```
-/N/project/fads_ng/analyst_reports_project/codes/02/image_based/02_image.py
-/N/project/fads_ng/analyst_reports_project/codes/02/image_based/ollama_server_deployment.sh
-/N/project/fads_ng/analyst_reports_project/codes/02/image_based/config.json
+02_image.py                 # Main script for PDF processing
+ollama_server_deployment.sh # Script to deploy Ollama instances
+config.json                 # Configuration file
+requirements.txt            # Required Python packages
+setup.py                    # Package installation script
+LICENSE                     # MIT License
 ```
+
+> **Note:** The original development paths (`/N/project/fads_ng/analyst_reports_project/...`) referenced in code comments are specific to Indiana University's Quartz computing environment and should be adapted to your local environment.
 
 ## Features
 
@@ -51,9 +63,18 @@ The main components are:
 
 ## Setup
 
-### Requesting Interactive Computing Resources
+### System Requirements
 
-Before running the code, you need to request appropriate computing resources based on your needs:
+This tool is designed to work with GPU acceleration for optimal performance:
+
+- **Recommended**: NVIDIA GPUs with CUDA support
+- Python 3.8+
+- [Ollama](https://github.com/jmorganca/ollama) for running LLMs locally
+- At least 16GB RAM (32GB+ recommended for processing large PDFs)
+
+### For HPC/Cluster Users (Indiana University-specific)
+
+> **Note:** The following commands are specific to Indiana University's computing resources. If you're using a different system, refer to your system's documentation for equivalent commands.
 
 #### V100 Quartz:
 ```bash
@@ -68,16 +89,26 @@ srun -p gpu-debug --cpus-per-task 30 --gpus 4 --mem 60GB -A r01352 --time 1:00:0
 #### H100 Quartz Hopper:
 ```bash
 srun -p hopper --cpus-per-task 40 --gpus 4 --mem 120GB -A r01352 --time 1:00:00 --pty bash
+```
 
-Prerequisites:
+### General Setup (All Systems)
 
 1. Ensure you have Ollama installed
-2. Clone this repository
-3. Install Python dependencies:
    ```bash
-   pip install pymupdf requests
+   # For Linux/macOS
+   curl -fsSL https://ollama.com/install.sh | sh
+   
+   # For other systems, see: https://github.com/jmorganca/ollama
    ```
-4. Make the deployment script executable:
+
+2. Clone this repository and install dependencies:
+   ```bash
+   git clone https://github.com/VedantS5/analyst-report-vision.git
+   cd analyst-report-vision
+   pip install -r requirements.txt
+   ```
+
+3. Make the deployment script executable:
    ```bash
    chmod +x ollama_server_deployment.sh
    ```
@@ -89,15 +120,17 @@ Prerequisites:
 First, deploy one or more Ollama instances using the deployment script:
 
 ```bash
-# Navigate to the directory where the deployment script is located
-cd /N/project/fads_ng/analyst_reports_project/codes/02/image_based/
-
-# For image processing with 4 GPUs (recommended)
+# Deploy Ollama instances optimized for image processing (4 GPUs)
 ./ollama_server_deployment.sh image
 
-# Or for other configurations
+# Or for specific GPU configurations (if running on IU Quartz H100 GPUs)
 ./ollama_server_deployment.sh h100
+
+# For other GPU types (v100, a100, qwq)
+./ollama_server_deployment.sh [GPU_TYPE]
 ```
+
+> **Note for non-HPC users:** If running on a personal computer, you may need to modify the deployment script or simply run Ollama directly with `ollama serve` in a separate terminal.
 
 ### 2. Process PDFs
 
@@ -105,10 +138,10 @@ Process a single PDF or a directory of PDFs:
 
 ```bash
 # Process a single PDF
-python /N/project/fads_ng/analyst_reports_project/codes/02/image_based/02_image.py /path/to/your_file.pdf
+python 02_image.py /path/to/your_file.pdf
 
 # Process all PDFs in a directory
-python /N/project/fads_ng/analyst_reports_project/codes/02/image_based/02_image.py /N/project/fads_ng/analyst_reports_project/data/pdfs/
+python 02_image.py /path/to/pdfs/directory
 
 # Process with a specific config file
 python /N/project/fads_ng/analyst_reports_project/codes/02/image_based/02_image.py /path/to/pdfs --config /path/to/custom_config.json
@@ -134,17 +167,20 @@ python /N/project/fads_ng/analyst_reports_project/codes/02/image_based/02_image.
 
 ### 3. Expected Input/Output
 
-By default, the tool processes PDFs from:
-```
-/N/project/fads_ng/analyst_reports_project/data/pdfs/
+By default, the tool processes PDFs from the specified input path and outputs CSV results based on the configuration.
+
+Input and output paths can be customized in the `config.json` file:
+
+```json
+{
+  "output": {
+    "csv_filename": "author_extraction_results.csv"
+  },
+  ...
+}
 ```
 
-And outputs CSV results to:
-```
-/N/project/fads_ng/analyst_reports_project/results/author_extraction_results.csv
-```
-
-You can customize these paths in the configuration file.
+The output CSV will be created in the current working directory unless a full path is specified in the configuration.
 
 ### 4. Configuration
 
@@ -265,27 +301,33 @@ For optimal performance:
 - Process large batches of PDFs at once
 - Adjust the number of pages to process if only first few pages contain author information
 
-## Server Environment Setup
-
-This tool is configured for the specific computing environment at:
-`/N/project/fads_ng/`
+## Environment Setup
 
 ### GPU Configuration
 
-The deployment script is optimized for the H100 GPU setup on the server. The system has 4 H100 GPUs that can run multiple Ollama instances concurrently for parallel processing.
+The deployment script can be configured for different GPU setups:
 
-### Model Storage
+- `image`: Optimized for image processing (recommended) - 1 Ollama instance per GPU
+- `h100`: Optimized for H100 GPUs - 8 instances per GPU
+- `a100`: Optimized for A100 GPUs - 4 instances per GPU
+- `v100`: Optimized for V100 GPUs - 3 instances per GPU
+- `qwq`: Generic configuration for other GPU types - 2 instances per GPU
 
-LLM models are stored in:
-```
-/N/project/fads_ng/ollama_setup/ollama_models
-```
+### Local Environment Configuration
 
-### Data Paths
+For local installations, you may need to modify these settings:
 
-Default data directories:
-- Input PDFs: `/N/project/fads_ng/analyst_reports_project/data/pdfs/`
-- Results: `/N/project/fads_ng/analyst_reports_project/results/`
+1. Edit `ollama_server_deployment.sh` to match your GPU configuration
+2. Update the `config.json` file with appropriate paths for your system
+3. If running without multiple GPUs, you can use a simpler setup with a single Ollama instance
+
+### Using Your Own LLM Models
+
+The system is configured to use the `gemma3:27b` model by default. If you want to use a different model:
+
+1. Modify the model name in `config.json`
+2. Make sure your model has multimodal capabilities (image understanding)
+3. Update the `ollama_server_deployment.sh` script to pull your preferred model
 
 ## Troubleshooting
 
