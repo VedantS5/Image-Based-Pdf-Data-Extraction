@@ -270,6 +270,31 @@ You can also specify a custom config file when running the script:
 python 02_image.py path/to/pdfs --config custom_config.json
 ```
 
+## Parsing Configuration
+
+The model response can now be interpreted flexibly via the `parsing` section in
+`config.json` (identical to the *analyst-report-text* project):
+
+| Key | Description |
+|-----|-------------|
+| `type` | `json` (default) or `regex` |
+| `authors_key`, `name_key`, `title_key`, `email_key` | JSON mode: field names |
+| `skip_domains` | Email domains to ignore |
+| `regex_pattern` | Regex mode: pattern with named groups `?P<name>` etc. |
+| `*_group` | Capture-group names if different |
+
+Example switching to regex:
+
+```json
+"parsing": {
+  "type": "regex",
+  "regex_pattern": "(?P<name>[A-Z][a-z]+\\s+[A-Z][a-z]+)(?:,?\\s+(?P<title>[A-Za-z ]+))?\\s+(?P<email>[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+)"
+}
+```
+
+Edit `prompt` templates and parsing config together when you change the model
+output format.
+
 ## How It Works
 
 1. **ollama_server_deployment.sh**: 
@@ -337,4 +362,3 @@ The system is configured to use the `gemma3:27b` model by default. If you want t
 - **GPU memory issues**: Reduce the number of Ollama instances if you encounter CUDA out-of-memory errors
 - **Server-specific paths**: Make sure all path references match the server directory structure
 - **Network connectivity**: If running from a client, ensure proper network access to the server instances
-

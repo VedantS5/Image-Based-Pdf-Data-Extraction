@@ -18,6 +18,18 @@
     "output": {
       "csv_filename": "author_extraction_results.csv"
     },
+    "parsing": {
+        "type": "json",
+        "authors_key": "authors",
+        "name_key": "name",
+        "title_key": "title",
+        "email_key": "email",
+        "skip_domains": ["mergent.com"],
+        "regex_pattern": "",
+        "name_group": "name",
+        "title_group": "title",
+        "email_group": "email"
+    },
     "features": {
       "document_type_detection": true,
       "institution_detection": true,
@@ -41,4 +53,3 @@
       "termination_specific": "This appears to be a termination of coverage report which may not have individual analysts assigned. \nLook for both individual authors and also department attributions like 'Credit Suisse US Eq. Res'.\nReturn an empty authors array if you only find departmental attributions rather than specific individuals.\nIMPORTANT: Research departments like 'Credit Suisse US Eq. Res' are NOT individual authors."
     }
   }
-  

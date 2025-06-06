@@ -14,6 +14,7 @@ import concurrent.futures
 import socket
 import time
 from typing import List, Dict, Any, Optional, Tuple
+import logging
 
 # Default path to JSON configuration file
 DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
@@ -41,6 +42,18 @@ def load_json_config(config_file=None):
         },
         "output": {
             "csv_filename": "author_extraction_results.csv"
+        },
+        "parsing": {
+            "type": "json",
+            "authors_key": "authors",
+            "name_key": "name",
+            "title_key": "title",
+            "email_key": "email",
+            "skip_domains": ["mergent.com"],
+            "regex_pattern": "",
+            "name_group": "name",
+            "title_group": "title",
+            "email_group": "email"
         },
         "features": {
             "document_type_detection": True,
@@ -383,7 +396,7 @@ def standardize_credentials_in_authors(authors):
                 all_creds = existing_creds_set.union(current_creds_set)
                 if all_creds != existing_creds_set:
                     # Reconstruct name for existing_author with all credentials
-                    base_part_of_existing = re.sub(r"(,\s*(CFA|PhD|MD))+", "", existing_name, flags=re.IGNORECASE).split(',')[0].strip()
+                    base_part_of_existing = re.sub(r"(,\s*(CFA|PhD|MD))+", "", existing_name).split(',')[0].strip()
                     if all_creds:
                          existing_author["name"] = base_part_of_existing + ", " + ", ".join(sorted(list(c.upper() for c in all_creds)))
                     else:
@@ -646,6 +659,73 @@ def detect_ollama_instances() -> List[Dict[str, str]]:
     
     return active_instances
 
+def parse_model_response(content: str) -> List[Dict]:
+    """Parse model output according to CONFIG['parsing'] rules."""
+    try:
+        p_cfg = CONFIG.get("parsing", {})
+        parse_type = p_cfg.get("type", "json").lower()
+
+        # Strip markdown code fences if present
+        content = content.strip()
+        if content.startswith("```"):
+            content = re.sub(r"^```[a-zA-Z0-9]*\n", "", content)
+            content = content.rstrip("`").rstrip()
+
+        authors: List[Dict] = []
+        skip_domains = [d.lower() for d in p_cfg.get("skip_domains", ["mergent.com"])]
+
+        if parse_type == "json":
+            try:
+                data = json.loads(content)
+            except json.JSONDecodeError as ex:
+                logging.error(f"JSON decode error: {ex}")
+                return []
+            raw_authors = data.get(p_cfg.get("authors_key", "authors"), [])
+            if not isinstance(raw_authors, list):
+                return []
+            n_key = p_cfg.get("name_key", "name")
+            t_key = p_cfg.get("title_key", "title")
+            e_key = p_cfg.get("email_key", "email")
+            for a in raw_authors:
+                if not isinstance(a, dict):
+                    continue
+                name = str(a.get(n_key, "")).strip()
+                title = str(a.get(t_key, "")).strip() if isinstance(a.get(t_key), str) else ""
+                email = str(a.get(e_key, "")).strip()
+                if email and any(dom in email.lower() for dom in skip_domains):
+                    continue
+                if name and len(name.split()) >= 2 and any(c.isupper() for c in name) and len(name) <= 100:
+                    authors.append({"name": name, "title": title, "email": email})
+        elif parse_type == "regex":
+            pattern = p_cfg.get("regex_pattern", "")
+            if not pattern:
+                logging.error("Regex parsing selected but 'regex_pattern' is empty in config.")
+                return []
+            try:
+                regex = re.compile(pattern, re.MULTILINE | re.IGNORECASE)
+            except re.error as ex:
+                logging.error(f"Invalid regex pattern: {ex}")
+                return []
+            ng = p_cfg.get("name_group", "name")
+            tg = p_cfg.get("title_group", "title")
+            eg = p_cfg.get("email_group", "email")
+            for m in regex.finditer(content):
+                gd = m.groupdict()
+                name = gd.get(ng, "").strip()
+                title = gd.get(tg, "").strip()
+                email = gd.get(eg, "").strip()
+                if email and any(dom in email.lower() for dom in skip_domains):
+                    continue
+                if name and len(name.split()) >= 2 and any(c.isupper() for c in name) and len(name) <= 100:
+                    authors.append({"name": name, "title": title, "email": email})
+        else:
+            logging.error(f"Unsupported parse type: {parse_type}")
+            return []
+        return authors
+    except Exception as e:
+        logging.error(f"Error parsing model response: {e}")
+        return []
+
 def process_image_with_ollama(image, page_num_display, total_pages_in_doc, supporting_text="", doc_type="standard", institution=None, ollama_instance=None):
     """Send image to Ollama model for author extraction. page_num_display is 1-based."""
     # Convert PIL image to base64
@@ -735,13 +815,7 @@ def process_image_with_ollama(image, page_num_display, total_pages_in_doc, suppo
         result = response.json()
 
         if "response" in result:
-            try:
-                author_data = json.loads(result["response"])
-                return author_data.get("authors", [])
-            except json.JSONDecodeError as jde:
-                print(f"  Error parsing JSON response from Ollama for page {page_num_display}: {jde}")
-                print(f"  Ollama raw response snippet: {result['response'][:500]}")
-                return []
+            return parse_model_response(result["response"])
         else:
             print(f"  Unexpected response format from Ollama for page {page_num_display}: {result}")
             return []
@@ -897,8 +971,6 @@ def extract_authors_from_pdf(pdf_path):
         text_authors = []
         if institution:
             text_authors = extract_authors_from_text_pattern(supporting_text, institution, doc_type)
-            if text_authors:
-                print(f"  Found {len(text_authors)} authors through text pattern matching")
         
         # Open the PDF to get page count
         doc_for_page_count = fitz.open(pdf_path)
@@ -1153,7 +1225,7 @@ def process_pdf_with_instance(pdf_file: str, output_csv: str, ollama_instance: D
             if institution:
                 print(f"  Detected institution: {institution}")
         
-        # For specific institutions with known formats, try text-based extraction
+        # For specific institutions with known formats, try text-based extraction as fallback
         text_authors = []
         if institution:
             text_authors = extract_authors_from_text_pattern(supporting_text, institution, doc_type)
