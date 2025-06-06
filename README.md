@@ -228,6 +228,13 @@ Example configuration:
 
 ```json
 {
+  "input": {
+    "directory": "path/to/your/pdf_folder" 
+  },
+  "execution": {
+    "max_files": 0,
+    "skip_processed_files": true
+  },
   "ollama": {
     "fallback_api_url": "http://localhost:11434/api/generate",
     "model": "gemma3:27b",
@@ -245,18 +252,35 @@ Example configuration:
     "image_scale": 2.0
   },
   "output": {
+    "directory": "results/extraction_data",
     "csv_filename": "author_extraction_results.csv"
   },
-  "metadata": {
-    "csv_path": "/N/project/fads_ng/analyst_reports_project/data/reports_metadata.csv",
-    "skip_terms": ["termination", "dropping", "terminate", "drop coverage"],
-    "id_extraction_pattern": "key_(\\d+)"
+  "parsing": {
+    "type": "json",
+    "authors_key": "authors",
+    "name_key": "name",
+    "title_key": "title",
+    "email_key": "email",
+    "skip_domains": ["mergent.com"],
+    "regex_pattern": "",
+    "name_group": "name",
+    "title_group": "title",
+    "email_group": "email"
   },
   "features": {
     "document_type_detection": true,
     "institution_detection": true,
     "email_validation": true,
-    "prioritize_first_page": true
+    "prioritize_first_page": true,
+    "metadata_filtering": true
+  },
+  "metadata": {
+    "csv_path": "/N/project/fads_ng/analyst_reports_project/data/reports_metadata.csv",
+    "skip_terms": [
+      "termination", "dropping", "terminate", "drop coverage", 
+      "discontinue coverage", "discontinuing coverage"
+    ],
+    "id_extraction_pattern": "key_(\\d+)"
   },
   "debug": {
     "enabled": false
@@ -267,8 +291,51 @@ Example configuration:
 You can also specify a custom config file when running the script:
 
 ```bash
-python 02_image.py path/to/pdfs --config custom_config.json
+python 02_image.py path/to/pdfs --config custom_config.json --output_csv results/current_run.csv --max_files 50 --no-skip_processed
 ```
+
+## Input, Output, and Batch Processing Configuration
+
+The script offers several configuration options for managing input PDF files, output CSV files, and batch processing behavior. These can be set in `config.json` and, in some cases, overridden by command-line arguments.
+
+### Input Configuration
+
+-   **`input.directory`** (JSON, in `input` object):
+    -   Specifies the default directory to scan for PDF files if no explicit PDF paths are provided on the command line.
+    -   Example: `"input": { "directory": "path/to/your/pdf_folder" }`
+-   **PDF Paths** (Command Line):
+    -   You can provide one or more paths to specific PDF files or directories containing PDF files directly on the command line. These will take precedence over `input.directory`.
+    -   Example: `python 02_image.py my_report.pdf another_folder/`
+
+### Output Configuration
+
+-   **`output.directory`** (JSON, in `output` object):
+    -   Specifies the directory where the output CSV file will be saved. Defaults to `.` (the current directory).
+    -   Example: `"output": { "directory": "results/extraction_data" }`
+-   **`output.csv_filename`** (JSON, in `output` object):
+    -   Specifies the name of the output CSV file. Defaults to `author_extraction_results.csv`.
+    -   Example: `"output": { "csv_filename": "my_custom_authors.csv" }`
+-   **`--output_csv FILE`** (Command Line):
+    -   Overrides both `output.directory` and `output.csv_filename` from the config.
+    -   The directory part of the provided path will be used as the output directory, and the filename part as the CSV filename.
+    -   Example: `python 02_image.py --output_csv processed_data/final_report.csv`
+
+### Execution and Batch Processing
+
+-   **`execution.max_files`** (JSON, in `execution` object):
+    -   Limits the maximum number of PDF files to process in a single run. Set to `0` (default) to process all found files.
+    -   Example: `"execution": { "max_files": 100 }`
+-   **`--max_files NUM`** (Command Line):
+    -   Overrides `execution.max_files` from the config.
+    -   Example: `python 02_image.py --max_files 10`
+-   **`execution.skip_processed_files`** (JSON, in `execution` object):
+    -   If `true` (default), the script will check the output CSV file and skip processing any PDF files that already have entries.
+    -   Set to `false` to re-process all files regardless of previous runs.
+    -   Example: `"execution": { "skip_processed_files": false }`
+-   **`--skip_processed` / `--no-skip_processed`** (Command Line):
+    -   `--skip_processed`: Explicitly enables skipping (overrides config if set to false).
+    -   `--no-skip_processed`: Explicitly disables skipping (overrides config if set to true).
+    -   Example (force re-processing): `python 02_image.py --no-skip_processed`
 
 ## Parsing Configuration
 

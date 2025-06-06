@@ -1,4 +1,7 @@
 {
+    "input": {
+        "directory": "./input_pdfs"
+    },
     "ollama": {
       "fallback_api_url": "http://localhost:11434/api/generate",
       "model": "gemma3:27b",
@@ -16,7 +19,12 @@
       "image_scale": 2.0
     },
     "output": {
-      "csv_filename": "author_extraction_results.csv"
+        "directory": "./output_csvs",
+        "csv_filename": "author_extraction_results.csv"
+    },
+    "execution": {
+        "max_files": 0,
+        "skip_processed_files": true
     },
     "parsing": {
         "type": "json",
@@ -52,4 +60,4 @@
       "first_page_emphasis": "THIS IS THE FIRST PAGE where authors typically appear at the very top. Focus on the top section only.",
       "termination_specific": "This appears to be a termination of coverage report which may not have individual analysts assigned. \nLook for both individual authors and also department attributions like 'Credit Suisse US Eq. Res'.\nReturn an empty authors array if you only find departmental attributions rather than specific individuals.\nIMPORTANT: Research departments like 'Credit Suisse US Eq. Res' are NOT individual authors."
     }
-  }
+}

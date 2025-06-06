@@ -15,6 +15,8 @@ import socket
 import time
 from typing import List, Dict, Any, Optional, Tuple
 import logging
+import glob
+import threading
 
 # Default path to JSON configuration file
 DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
@@ -24,6 +26,13 @@ def load_json_config(config_file=None):
     """Load configuration from JSON file with fallback to default values if file not found."""
     # Default configuration as fallback
     default_config = {
+        "input": {
+            "directory": ""
+        },
+        "execution": {
+            "max_files": 0,
+            "skip_processed_files": True
+        },
         "ollama": {
             "fallback_api_url": "http://localhost:11434/api/generate",
             "model": "gemma3:27b",
@@ -41,6 +50,7 @@ def load_json_config(config_file=None):
             "image_scale": 2.0
         },
         "output": {
+            "directory": ".",
             "csv_filename": "author_extraction_results.csv"
         },
         "parsing": {
@@ -137,7 +147,7 @@ def load_config(config=None):
     metadata_config = config.get("metadata", {})
     METADATA_CSV_PATH = metadata_config.get("csv_path", "")
     SKIP_TERMS = metadata_config.get("skip_terms", [])
-    ID_EXTRACTION_PATTERN = metadata_config.get("id_extraction_pattern", "key_(\d+)")
+    ID_EXTRACTION_PATTERN = metadata_config.get("id_extraction_pattern", "key_(\\d+)")
     METADATA_CACHE = {}
     
     # Execution settings
@@ -342,10 +352,12 @@ def clean_author_name(name):
     return name
 
 
-def standardize_credentials_in_authors(authors):
+def standardize_credentials_in_authors(authors: List[Dict]) -> List[Dict]:
     """Standardize credential format and remove duplicates with different credential formats."""
-    if not authors: return []
-    name_map = {}
+    if not authors:
+        return []
+    
+    name_map = {} # Maps base_name.lower() to the best author_obj found so far
 
     for author_obj in authors:
         name = author_obj.get("name", "")
@@ -355,53 +367,53 @@ def standardize_credentials_in_authors(authors):
         name = normalize_credential(name)
         author_obj["name"] = name
 
-        base_name_parts = []
-        temp_name = name
-        # More robustly remove credentials for base_name generation
-        creds_to_strip = ["CFA", "PhD", "MD"] # Add other common credentials here
+        base_name = name
+        creds_to_strip = ["CFA", "PhD", "MD"]
         for cred in creds_to_strip:
-            temp_name = re.sub(r",\s*" + re.escape(cred) + r"\b", "", temp_name, flags=re.IGNORECASE)
-            temp_name = re.sub(r"\s+" + re.escape(cred) + r"\b", "", temp_name, flags=re.IGNORECASE) # if no comma
-
-        base_name = temp_name.split(',')[0].strip().lower()
+            base_name = re.sub(r",\s*" + re.escape(cred) + r"\b", "", base_name, flags=re.IGNORECASE)
+            base_name = re.sub(r"\s+" + re.escape(cred) + r"\b", "", base_name, flags=re.IGNORECASE)
+        base_name = base_name.split(',')[0].strip().lower()
 
         if not base_name:
             continue
 
         if base_name not in name_map:
-            name_map[base_name] = author_obj
+            name_map[base_name] = author_obj.copy()
         else:
-            existing_author = name_map[base_name]
-            existing_name = existing_author.get("name", "")
+            existing_author_obj = name_map[base_name]
+            existing_name = existing_author_obj.get("name", "")
+            
+            current_has_more_info = (len(name) > len(existing_name)) or \
+                                    (author_obj.get("email") and not existing_author_obj.get("email")) or \
+                                    (author_obj.get("title") and not existing_author_obj.get("title"))
 
-            current_creds_set = set(re.findall(r"(CFA|PhD|MD)", name, re.IGNORECASE))
-            existing_creds_set = set(re.findall(r"(CFA|PhD|MD)", existing_name, re.IGNORECASE))
-
-            if len(current_creds_set) > len(existing_creds_set) or \
-               (len(current_creds_set) == len(existing_creds_set) and len(name) > len(existing_name)):
-                # Current entry is better, replace, but try to merge title/email
-                new_author_obj = author_obj.copy() # Work on a copy
-                if not new_author_obj.get("title") and existing_author.get("title"):
-                    new_author_obj["title"] = existing_author.get("title")
-                if not new_author_obj.get("email") and existing_author.get("email"):
-                    new_author_obj["email"] = existing_author.get("email")
-                name_map[base_name] = new_author_obj
+            if current_has_more_info:
+                merged_author_obj = author_obj.copy()
+                if not merged_author_obj.get("title") and existing_author_obj.get("title"):
+                    merged_author_obj["title"] = existing_author_obj.get("title")
+                if not merged_author_obj.get("email") and existing_author_obj.get("email"):
+                    merged_author_obj["email"] = existing_author_obj.get("email")
+                name_map[base_name] = merged_author_obj
             else:
-                # Existing entry is better or same, try to merge title/email into existing
-                if not existing_author.get("title") and author_obj.get("title"):
-                    existing_author["title"] = author_obj.get("title")
-                if not existing_author.get("email") and author_obj.get("email"):
-                    existing_author["email"] = author_obj.get("email")
-                # Merge credentials if new one has some not in existing
+                if not existing_author_obj.get("title") and author_obj.get("title"):
+                    existing_author_obj["title"] = author_obj.get("title")
+                if not existing_author_obj.get("email") and author_obj.get("email"):
+                    existing_author_obj["email"] = author_obj.get("email")
+                current_creds_set = set(re.findall(r"(CFA|PhD|MD)", name, re.IGNORECASE))
+                existing_creds_set = set(re.findall(r"(CFA|PhD|MD)", existing_name, re.IGNORECASE))
                 all_creds = existing_creds_set.union(current_creds_set)
                 if all_creds != existing_creds_set:
-                    # Reconstruct name for existing_author with all credentials
-                    base_part_of_existing = re.sub(r"(,\s*(CFA|PhD|MD))+", "", existing_name).split(',')[0].strip()
+                    base_part_of_existing = existing_name
+                    for cred_to_remove in creds_to_strip:
+                        base_part_of_existing = re.sub(r",\s*" + re.escape(cred_to_remove) + r"\b", "", base_part_of_existing, flags=re.IGNORECASE)
+                        base_part_of_existing = re.sub(r"\s+" + re.escape(cred_to_remove) + r"\b", "", base_part_of_existing, flags=re.IGNORECASE)
+                    base_part_of_existing = base_part_of_existing.split(',')[0].strip()
+                    
                     if all_creds:
-                         existing_author["name"] = base_part_of_existing + ", " + ", ".join(sorted(list(c.upper() for c in all_creds)))
+                         existing_author_obj["name"] = base_part_of_existing + ", " + ", ".join(sorted(list(c.upper() for c in all_creds)))
                     else:
-                         existing_author["name"] = base_part_of_existing
-
+                         existing_author_obj["name"] = base_part_of_existing
+                    existing_author_obj["name"] = normalize_credential(existing_author_obj["name"])
 
     return list(name_map.values())
 
@@ -1090,7 +1102,6 @@ def extract_authors_from_pdf(pdf_path):
         traceback.print_exc()
         return []
 
-
 def determine_max_authors_columns(output_csv_path, current_run_authors_count):
     """Determine maximum number of author sets (name, title, email) needed for CSV columns."""
     max_sets = max(5, current_run_authors_count) 
@@ -1107,106 +1118,42 @@ def determine_max_authors_columns(output_csv_path, current_run_authors_count):
             print(f"Warning: Could not read existing CSV header from {output_csv_path} to determine max authors: {e}")
     return max_sets
 
-def write_to_csv(pdf_filename, authors_data, output_csv_path=OUTPUT_CSV_FILENAME):
-    """Write extracted author data to CSV, updating if filename exists, extending columns if needed."""
-    base_pdf_filename = os.path.splitext(os.path.basename(pdf_filename))[0]
-    max_author_sets = determine_max_authors_columns(output_csv_path, len(authors_data))
-    
-    header = ["filename"]
-    for i in range(1, max_author_sets + 1):
-        header.extend([f"author_{i}_name", f"author_{i}_title", f"author_{i}_email"])
-    
-    current_row_data = [base_pdf_filename]
-    for i in range(max_author_sets):
-        if i < len(authors_data):
-            author = authors_data[i]
-            current_row_data.extend([
-                author.get("name", ""),
-                author.get("title", ""),
-                author.get("email", "")
-            ])
-        else:
-            current_row_data.extend(["", "", ""])
-
-    rows_to_write = []
-    file_exists = os.path.isfile(output_csv_path)
-    header_to_use = header # Default to the newly generated header
-
-    if file_exists:
-        with open(output_csv_path, 'r', newline='', encoding='utf-8') as f_read:
-            reader = csv.reader(f_read)
-            try:
-                existing_header = next(reader)
-                if len(existing_header) >= len(header): # Use existing header if it's wider or same
-                    header_to_use = existing_header
-                # else new header is wider, so existing_header will be replaced by header_to_use (which is 'header')
-
-                rows_to_write.append(header_to_use) # Add the determined header first
-                found_and_updated = False
-                for row in reader:
-                    if not row: continue
-                    # Pad row if it's shorter than the header we are using
-                    if len(row) < len(header_to_use):
-                        row.extend([""] * (len(header_to_use) - len(row)))
-
-                    if row[0] == base_pdf_filename:
-                        # Ensure current_row_data matches the width of header_to_use
-                        padded_current_row = current_row_data[:len(header_to_use)] + \
-                                             [""] * (len(header_to_use) - len(current_row_data))
-                        rows_to_write.append(padded_current_row)
-                        found_and_updated = True
-                    else:
-                        rows_to_write.append(row[:len(header_to_use)]) # Ensure row is not wider than header
-                if not found_and_updated:
-                    padded_current_row = current_row_data[:len(header_to_use)] + \
-                                         [""] * (len(header_to_use) - len(current_row_data))
-                    rows_to_write.append(padded_current_row)
-
-            except StopIteration: # Empty file
-                rows_to_write.append(header_to_use)
-                padded_current_row = current_row_data[:len(header_to_use)] + \
-                                     [""] * (len(header_to_use) - len(current_row_data))
-                rows_to_write.append(padded_current_row)
-            except Exception as e:
-                print(f"Error reading existing CSV {output_csv_path}: {e}. Will create/overwrite with new data.")
-                rows_to_write = [header_to_use]
-                padded_current_row = current_row_data[:len(header_to_use)] + \
-                                     [""] * (len(header_to_use) - len(current_row_data))
-                rows_to_write.append(padded_current_row)
-    else: # File does not exist
-        rows_to_write.append(header_to_use)
-        padded_current_row = current_row_data[:len(header_to_use)] + \
-                             [""] * (len(header_to_use) - len(current_row_data))
-        rows_to_write.append(padded_current_row)
+def write_to_csv(output_csv_path: str, pdf_file: str, authors: List[Dict], lock: Optional[threading.Lock] = None):
+    """Append author data to the CSV file. Assumes header is already written."""
     try:
-        with open(output_csv_path, 'w', newline='', encoding='utf-8') as f_write:
-            writer = csv.writer(f_write)
-            writer.writerows(rows_to_write)
-    except IOError as e:
-        print(f"Error writing to CSV file {output_csv_path}: {e}")
-
-
-def process_pdf_with_instance(pdf_file: str, output_csv: str, ollama_instance: Dict[str, str]):
-    """Process a single PDF file using a specific Ollama instance."""
-    try:
-        # Extract just the PDF filename without path
-        pdf_filename = os.path.basename(pdf_file)
-        
-        # Check if the document should be skipped based on metadata
-        if ENABLE_METADATA_FILTERING and should_skip_document(pdf_file):
-            print(f"Skipping {pdf_filename} based on metadata filtering")
-            return pdf_file, []
+        if lock:
+            lock.acquire()
+        with open(output_csv_path, 'a', newline='', encoding='utf-8') as csvfile:
+            fieldnames = ['PDF File Path', 'Author Name', 'Author Email', 'Author Title', 'Page Number', 'Extraction Method', 'Raw LLM Output']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             
-        print(f"Processing '{pdf_filename}' with Ollama instance at {ollama_instance['url']}")
-        
-        # Custom extract_authors implementation that uses the specified Ollama instance
-        def extract_with_instance(page_idx, image, page_num_display, total_pages, supporting_text, doc_type, institution):
-            return process_image_with_ollama(
-                image, page_num_display, total_pages, 
-                supporting_text, doc_type, institution, 
-                ollama_instance
-            )
-        
+            # Header is assumed to be written by main() when initializing the file
+            for author_data in authors:
+                writer.writerow({
+                    'PDF File Path': pdf_file,
+                    'Author Name': author_data.get('name', ''),
+                    'Author Email': author_data.get('email', ''),
+                    'Author Title': author_data.get('title', ''),
+                    'Page Number': author_data.get('page_number', ''),
+                    'Extraction Method': author_data.get('extraction_method', ''),
+                    'Raw LLM Output': author_data.get('raw_llm_output', '')
+                })
+    except Exception as e:
+        print(f"Error writing to CSV {output_csv_path}: {e}")
+    finally:
+        if lock and lock.locked():
+            lock.release()
+    
+    return
+
+def extract_authors_from_pdf(pdf_file: str, ollama_instance_details: Dict) -> Tuple[str, List[Dict]]:
+    """Extracts author information from a single PDF file using image and text-based methods."""
+    """Process pages of a PDF with Ollama and extract author information."""
+    print(f"Processing PDF: {pdf_file}")
+    all_authors_from_pages = []
+    page_authors_map = {}  # Track which page authors were found on
+    
+    try:
         # Extract text from the PDF for context
         supporting_text = extract_text_from_pdf_for_support(pdf_file, max_pages=MAX_TEXT_PAGES_FOR_SUPPORT)
         
@@ -1223,7 +1170,7 @@ def process_pdf_with_instance(pdf_file: str, output_csv: str, ollama_instance: D
         if ENABLE_INSTITUTION_DETECTION:
             institution, institution_domain = identify_institution(supporting_text)
             if institution:
-                print(f"  Detected institution: {institution}")
+                print(f"  Detected institution: {institution} ({institution_domain})")
         
         # For specific institutions with known formats, try text-based extraction as fallback
         text_authors = []
@@ -1231,71 +1178,123 @@ def process_pdf_with_instance(pdf_file: str, output_csv: str, ollama_instance: D
             text_authors = extract_authors_from_text_pattern(supporting_text, institution, doc_type)
         
         # Open the PDF to get page count
-        doc = fitz.open(pdf_file)
-        total_pages_in_doc = len(doc)
+        doc_for_page_count = fitz.open(pdf_file)
+        total_pages_in_doc = len(doc_for_page_count)
+        doc_for_page_count.close()
         
-        # Pages to process
-        if PAGES_TO_PROCESS_PER_PDF is None or PAGES_TO_PROCESS_PER_PDF <= 0:
-            pages_to_scan = total_pages_in_doc
-        else:
-            pages_to_scan = min(total_pages_in_doc, PAGES_TO_PROCESS_PER_PDF)
+        # --- LOGIC TO DETERMINE PAGES TO SCAN ---
+        mode = PAGE_PROCESSING_CONFIG.get("mode", "all")
+        always_include_first = PAGE_PROCESSING_CONFIG.get("always_include_first", True)
+        pages_to_scan = []
         
-        all_authors_from_pages = []
-        page_authors_map = {}
+        if mode == "all":
+            pages_to_scan = list(range(total_pages_in_doc))  # All pages, 0-based indices
+            print(f"  Configured to process ALL {total_pages_in_doc} page(s) with Ollama.")
         
-        # Process each page
-        for page_idx in range(pages_to_scan):
-            page_num_display = page_idx + 1
+        elif mode == "first_n":
+            first_n = PAGE_PROCESSING_CONFIG.get("first_n", 0)
+            if first_n <= 0:  # Treat as 'all' if 0 or negative
+                pages_to_scan = list(range(total_pages_in_doc))
+                print(f"  Configured to process ALL {total_pages_in_doc} page(s) with Ollama.")
+            else:
+                pages_to_scan = list(range(min(first_n, total_pages_in_doc)))
+                print(f"  Configured to process first {first_n} page(s); will process {len(pages_to_scan)} page(s) with Ollama.")
+        
+        elif mode == "range":
+            # Range is 1-based in config, convert to 0-based for internal use
+            page_range = PAGE_PROCESSING_CONFIG.get("range", [1, 1])
+            start_page = max(0, page_range[0] - 1)  # Convert to 0-based, ensure non-negative
+            end_page = min(total_pages_in_doc - 1, page_range[1] - 1)  # Convert to 0-based, ensure in range
             
-            image = convert_pdf_page_to_image(pdf_file, page_idx)
+            if start_page <= end_page and start_page < total_pages_in_doc:
+                pages_to_scan = list(range(start_page, end_page + 1))
+                print(f"  Configured to process pages {page_range[0]}-{page_range[1]}; will process {len(pages_to_scan)} page(s) with Ollama.")
+            else:
+                # Invalid range, default to just page 1
+                pages_to_scan = [0] if total_pages_in_doc > 0 else []
+                print(f"  Invalid page range specified: {page_range}. Defaulting to first page.")
+        
+        # Always include the first page if specified and not already included
+        if always_include_first and 0 not in pages_to_scan and total_pages_in_doc > 0:
+            pages_to_scan.insert(0, 0)  # Add page 0 (first page) to the beginning
+            print("  Added first page to processing list due to always_include_first setting.")
+            
+        # Sort pages to process them in order
+        pages_to_scan.sort()
+        
+        # Now process each selected page
+        for page_idx in pages_to_scan:  # page_idx is 0-based
+            page_num_display = page_idx + 1 # For user messages, 1-based
+            print(f"  Processing page {page_num_display}/{total_pages_in_doc} with Ollama...")
+            
+            image = convert_pdf_page_to_image(pdf_file, page_idx) # Use 0-based index for fitz
             if image is None:
+                print(f"  Skipping page {page_num_display} due to image conversion error.")
                 continue
-                
-            # Process with the specified instance
-            authors_on_page = extract_with_instance(
-                page_idx, image, page_num_display, total_pages_in_doc,
-                supporting_text, doc_type, institution
+            
+            # Process image with Ollama using document type and institution info
+            authors_on_page = process_image_with_ollama(
+                image, 
+                page_num_display, 
+                total_pages_in_doc, 
+                supporting_text,
+                doc_type,
+                institution,
+                ollama_instance_details
             )
             
-            # Clean and store authors
-            cleaned_authors = clean_author_data_list(authors_on_page)
-            page_authors_map[page_idx] = cleaned_authors.copy() if cleaned_authors else []
+            # Clean the author data, filtering out institutional authors
+            cleaned_authors_on_page = clean_author_data_list(authors_on_page)
             
-            if cleaned_authors:
-                all_authors_from_pages.extend(cleaned_authors)
+            # Store authors found on this page
+            page_authors_map[page_idx] = cleaned_authors_on_page.copy() if cleaned_authors_on_page else []
+            
+            if cleaned_authors_on_page:
+                print(f"    Found {len(cleaned_authors_on_page)} potential author entry(s) on page {page_num_display}.")
+                all_authors_from_pages.extend(cleaned_authors_on_page)
+            else:
+                print(f"    No authors identified by Ollama on page {page_num_display}.")
         
-        doc.close()
-        
-        # Use text extraction if image-based extraction failed
+        # If no authors found through image processing, try using text-based extraction
         if not all_authors_from_pages and text_authors:
+            print("  Using text-based extraction results as no authors found through image processing")
             all_authors_from_pages = text_authors
+            
+        print(f"  Collected {len(all_authors_from_pages)} raw author entries from processed pages.")
         
-        # Final processing steps
-        filtered_authors = [a for a in all_authors_from_pages if a.get("name") and 
-                         not is_institutional_author(a.get("name"), a.get("title"), a.get("email"))]
+        # Final filtering for institutional authors
+        filtered_authors = []
+        for author in all_authors_from_pages:
+            if author and author.get("name") and not is_institutional_author(
+                author.get("name"), author.get("title"), author.get("email")
+            ):
+                filtered_authors.append(author)
+            elif author and author.get("name"):
+                print(f"  Filtering out institutional author: {author.get('name')}")
         
-        # Prioritize first page authors if enabled
-        if PRIORITIZE_FIRST_PAGE and filtered_authors and page_authors_map:
-            filtered_authors = prioritize_first_page_authors(filtered_authors, page_authors_map)
+        all_authors_from_pages = filtered_authors
+        print(f"  After filtering institutional authors: {len(all_authors_from_pages)} entries.")
         
-        # Validate emails if enabled
-        if ENABLE_EMAIL_VALIDATION and filtered_authors and institution_domain:
-            filtered_authors = validate_emails(filtered_authors, institution_domain)
+        # Prioritize authors found on first page
+        if PRIORITIZE_FIRST_PAGE and all_authors_from_pages and page_authors_map:
+            all_authors_from_pages = prioritize_first_page_authors(all_authors_from_pages, page_authors_map)
+            print("  Prioritized authors from first page.")
         
-        # Standardize credentials
-        final_authors = standardize_credentials_in_authors(filtered_authors)
-        
-        # Save to CSV
-        if final_authors:
-            write_to_csv(pdf_file, final_authors, output_csv)
+        # Validate and correct email domains
+        if ENABLE_EMAIL_VALIDATION and all_authors_from_pages and institution_domain:
+            all_authors_from_pages = validate_emails(all_authors_from_pages, institution_domain)
+            print("  Validated and corrected email domains.")
+            
+        # Standardize credentials and deduplicate
+        final_authors = standardize_credentials_in_authors(all_authors_from_pages)
+        print(f"  After standardization and deduplication: {len(final_authors)} unique author(s).")
         
         return pdf_file, final_authors
-            
+    
     except Exception as e:
-        print(f"Error processing {pdf_file}: {e}")
+        print(f"General error processing PDF '{pdf_file}': {e}")
         traceback.print_exc()
         return pdf_file, []
-
 
 def get_processed_files(csv_path):
     """Read the output CSV to get a list of already processed files.
@@ -1329,101 +1328,12 @@ def get_processed_files(csv_path):
     
     return processed_files
 
-
-def process_folder(folder_path, output_csv=OUTPUT_CSV_FILENAME):
-    """Process all PDFs in a folder using multiple Ollama instances in parallel."""
-    print(f"Processing all PDFs in folder: {folder_path}")
-    pdf_files = []
-    
-    try:
-        for filename in os.listdir(folder_path):
-            if filename.lower().endswith('.pdf'):
-                pdf_files.append(os.path.join(folder_path, filename))
-    except Exception as e:
-        print(f"Error listing directory {folder_path}: {e}")
-        return
-    
-    if not pdf_files:
-        print(f"No PDF files found in {folder_path}")
-        return
-        
-    # Get already processed files from output CSV
-    processed_files = get_processed_files(output_csv)
-    
-    # Filter out already processed files if requested
-    original_count = len(pdf_files)
-    if SKIP_PROCESSED_FILES and processed_files:
-        pdf_files = [f for f in pdf_files if os.path.abspath(f) not in processed_files]
-        print(f"Filtered out {original_count - len(pdf_files)} already processed files")
-    
-    # Limit to max_files if specified
-    if MAX_FILES > 0 and len(pdf_files) > MAX_FILES:
-        print(f"Limiting to {MAX_FILES} files out of {len(pdf_files)} available")
-        pdf_files = pdf_files[:MAX_FILES]
-    
-    if not pdf_files:
-        print("No files to process after filtering. Exiting.")
-        return
-    
-    # Auto-detect Ollama instances
-    global OLLAMA_INSTANCES
-    OLLAMA_INSTANCES = detect_ollama_instances()
-    
-    # Set number of worker threads based on available instances
-    global NUM_WORKERS
-    NUM_WORKERS = min(len(OLLAMA_INSTANCES), len(pdf_files))
-    
-    print(f"Found {len(pdf_files)} PDF file(s) to process using {NUM_WORKERS} worker(s).")
-    
-    if NUM_WORKERS > 1:
-        # Multi-processing approach
-        with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
-            # Create tasks with round-robin assignment of instances to files
-            futures = {}
-            for i, pdf_file in enumerate(pdf_files):
-                instance = OLLAMA_INSTANCES[i % len(OLLAMA_INSTANCES)]
-                futures[executor.submit(process_pdf_with_instance, pdf_file, output_csv, instance)] = pdf_file
-            
-            # Process results as they complete
-            for future in concurrent.futures.as_completed(futures):
-                pdf_file = futures[future]
-                try:
-                    _, authors = future.result()
-                    if authors:
-                        print(f"Processed '{os.path.basename(pdf_file)}': {len(authors)} author(s) extracted and saved to CSV.")
-                    else:
-                        print(f"Processed '{os.path.basename(pdf_file)}': No authors found.")
-                except Exception as e:
-                    print(f"Error processing {pdf_file}: {e}")
-                
-                print("-"*50)
-    else:
-        # Single instance processing
-        for pdf_file in pdf_files:
-            try:
-                # Extract authors from the PDF
-                authors = extract_authors_from_pdf(pdf_file)
-                
-                # Write results to CSV
-                if authors:
-                    write_to_csv(pdf_file, authors, output_csv)
-                    print(f"Extracted {len(authors)} author(s) from '{os.path.basename(pdf_file)}' and wrote to CSV.")
-                else:
-                    print(f"No authors extracted from '{os.path.basename(pdf_file)}'.")
-                    
-                print("\n" + "-"*50 + "\n") # Add separator between files
-                
-            except Exception as e:
-                print(f"Error processing {pdf_file}: {e}")
-                continue
-
-
-def parse_arguments():
+def setup_argument_parser():
     """Parse command-line arguments with support for JSON config file."""
     parser = argparse.ArgumentParser(description="Extract author information from PDF research reports using Ollama.")
     
     # Input path is required
-    parser.add_argument('input', help='Path to a PDF file or directory containing PDF files')
+    parser.add_argument("pdf_paths", nargs='*', help="Paths to PDF files or directories. If not provided, 'input.directory' from config will be used.")
     
     # Optional JSON config file
     parser.add_argument('--config', '-c', help='Path to JSON configuration file (default: config.json in script directory)')
@@ -1465,106 +1375,224 @@ def parse_arguments():
     
     # Debug flag for quick access
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
+
+    # Output CSV path override
+    parser.add_argument('--output_csv', metavar='FILE', help='Path to output CSV file (overrides config setting)')
     
     return parser.parse_args()
 
-
 def main():
-    """Main entry point for the application with command-line argument handling."""
-    global OLLAMA_INSTANCES, NUM_WORKERS
+    """Main entry point for the application."""
+    global CONFIG, OLLAMA_INSTANCES, NUM_WORKERS, MAX_FILES, SKIP_PROCESSED_FILES, DEBUG_MODE, OUTPUT_CSV_FILENAME
     
-    args = parse_arguments()
+    args = setup_argument_parser()
     
     # Load configuration from specified file or default location
-    config = load_json_config(args.config)
+    CONFIG = load_json_config(args.config)
     
-    # Override debug mode from command line if specified
+    # Override config with command-line arguments
     if args.debug:
-        config["debug"]["enabled"] = True
-        
-    # Apply page selection arguments if provided
+        CONFIG["debug"]["enabled"] = True
     if args.page_mode:
-        config["pdf_processing"]["pages_to_process"]["mode"] = args.page_mode
-        
+        CONFIG["pdf_processing"]["pages_to_process"]["mode"] = args.page_mode
     if args.page_range:
-        config["pdf_processing"]["pages_to_process"]["range"] = args.page_range
-        
+        CONFIG["pdf_processing"]["pages_to_process"]["range"] = args.page_range
     if args.first_n is not None:
-        config["pdf_processing"]["pages_to_process"]["first_n"] = args.first_n
-        
+        CONFIG["pdf_processing"]["pages_to_process"]["first_n"] = args.first_n
     if args.always_first is not None:
-        config["pdf_processing"]["pages_to_process"]["always_include_first"] = args.always_first
-        
-    # Apply metadata filtering arguments if provided
-    if args.metadata_filtering is not None:  # Only if explicitly set by user
-        config["features"]["metadata_filtering"] = args.metadata_filtering
-    
+        CONFIG["pdf_processing"]["pages_to_process"]["always_include_first"] = args.always_first
+    if args.metadata_filtering is not None:
+        CONFIG["features"]["metadata_filtering"] = args.metadata_filtering
     if args.metadata_csv:
-        if "metadata" not in config:
-            config["metadata"] = {}
-        config["metadata"]["csv_path"] = args.metadata_csv
-    
-    # Apply execution options if provided
+        CONFIG.setdefault("metadata", {})["csv_path"] = args.metadata_csv
     if args.max_files is not None:
-        if "execution" not in config:
-            config["execution"] = {}
-        config["execution"]["max_files"] = args.max_files
-        
+        CONFIG.setdefault("execution", {})["max_files"] = args.max_files
     if args.skip_processed is not None:
-        if "execution" not in config:
-            config["execution"] = {}
-        config["execution"]["skip_processed_files"] = args.skip_processed
+        CONFIG.setdefault("execution", {})["skip_processed_files"] = args.skip_processed
+    if args.output_csv:
+        # Output CSV path from CLI overrides config for both directory and filename
+        output_dir_cli, output_fname_cli = os.path.split(args.output_csv)
+        CONFIG.setdefault("output", {})["directory"] = output_dir_cli or "."
+        CONFIG["output"]["csv_filename"] = output_fname_cli
+
+    # Load the (potentially overridden) configuration into global variables
+    load_config(CONFIG) # This sets MAX_FILES, SKIP_PROCESSED_FILES, DEBUG_MODE etc.
+
+    # Determine PDF files to process
+    input_sources = []
+    if args.pdf_paths:
+        input_sources.extend(args.pdf_paths)
+    elif CONFIG.get("input", {}).get("directory"):
+        config_input_dir = CONFIG["input"]["directory"]
+        if config_input_dir and os.path.isdir(config_input_dir):
+            if DEBUG_MODE:
+                print(f"Using input directory from config: {config_input_dir}")
+            input_sources.append(config_input_dir)
+        elif config_input_dir:
+            print(f"Warning: Input directory from config not found or not a directory: {config_input_dir}")
+
+    if not input_sources:
+        print("Error: No PDF input paths provided via command line or 'input.directory' in config.")
+        sys.exit(1)
+
+    pdf_files_to_process = []
+    for path_arg in input_sources:
+        abs_path_arg = os.path.abspath(path_arg)
+        if os.path.isdir(abs_path_arg):
+            pdf_files_to_process.extend(glob.glob(os.path.join(abs_path_arg, '*.pdf')))
+            pdf_files_to_process.extend(glob.glob(os.path.join(abs_path_arg, '*.PDF')))
+        elif os.path.isfile(abs_path_arg) and abs_path_arg.lower().endswith('.pdf'):
+            pdf_files_to_process.append(abs_path_arg)
+        else:
+            print(f"Warning: Argument '{path_arg}' is not a valid PDF file or directory. Skipping.")
+
+    pdf_files_to_process = sorted(list(set(pdf_files_to_process))) # Unique, sorted
+
+    # Determine final output CSV path
+    output_dir_config = CONFIG.get("output", {}).get("directory", ".")
+    output_fname_config = CONFIG.get("output", {}).get("csv_filename", "extracted_authors.csv")
     
-    # Load the configuration into global variables
-    load_config(config)
-    
-    # Auto-detect Ollama instances if enabled
-    if config["ollama"]["auto_detect"]:
+    # If args.output_csv was provided, CONFIG['output'] was updated already.
+    # So, we can directly use the values from CONFIG to form the path.
+    final_output_dir = os.path.abspath(output_dir_config)
+    output_csv_path = os.path.join(final_output_dir, output_fname_config)
+    OUTPUT_CSV_FILENAME = output_csv_path # Update global for other functions if they use it (though they shouldn't for path)
+
+    if not os.path.exists(final_output_dir):
+        try:
+            os.makedirs(final_output_dir)
+            print(f"Created output directory: {final_output_dir}")
+        except OSError as e:
+            print(f"Error creating output directory {final_output_dir}: {e}")
+            sys.exit(1)
+
+    # Initialize CSV file with header if it doesn't exist or is empty
+    file_exists = os.path.isfile(output_csv_path)
+    if not file_exists or os.path.getsize(output_csv_path) == 0:
+        try:
+            with open(output_csv_path, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = ['PDF File Path', 'Author Name', 'Author Email', 'Author Title', 'Page Number', 'Extraction Method', 'Raw LLM Output']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+            if DEBUG_MODE:
+                print(f"Initialized CSV header in {output_csv_path}")
+        except IOError as e:
+            print(f"Error initializing CSV file {output_csv_path}: {e}")
+            sys.exit(1)
+
+    # Get already processed files from output CSV if skipping
+    processed_files_set = set()
+    if SKIP_PROCESSED_FILES:
+        processed_files_set = get_processed_files(output_csv_path) # get_processed_files uses global SKIP_PROCESSED_FILES
+
+    # Filter out already processed files and apply MAX_FILES limit
+    pending_processing = []
+    if SKIP_PROCESSED_FILES and processed_files_set:
+        for f_path in pdf_files_to_process:
+            if os.path.abspath(f_path) not in processed_files_set:
+                pending_processing.append(f_path)
+        if DEBUG_MODE:
+            print(f"Filtered out {len(pdf_files_to_process) - len(pending_processing)} already processed files.")
+    else:
+        pending_processing = pdf_files_to_process
+
+    if MAX_FILES > 0 and len(pending_processing) > MAX_FILES:
+        if DEBUG_MODE:
+            print(f"Limiting processing to {MAX_FILES} files due to 'max_files' config (found {len(pending_processing)} pending). Taking first {MAX_FILES}.")
+        pdf_files_to_process = pending_processing[:MAX_FILES]
+    else:
+        pdf_files_to_process = pending_processing
+
+    if not pdf_files_to_process:
+        print("No new PDF files to process after filtering. Exiting.")
+        sys.exit(0)
+
+    # Auto-detect Ollama instances
+    if CONFIG.get("ollama", {}).get("auto_detect", True):
         detected_instances = detect_ollama_instances()
         if detected_instances:
             OLLAMA_INSTANCES = detected_instances
-            if DEBUG_MODE:
-                print(f"Detected {len(OLLAMA_INSTANCES)} Ollama instances")
         else:
-            print("Warning: No Ollama instances detected. Using default configuration.")
-            OLLAMA_INSTANCES = [{"url": OLLAMA_API_URL, "model": OLLAMA_MODEL}]
-    
-    NUM_WORKERS = min(len(OLLAMA_INSTANCES), 8)  # Cap workers at 8 to avoid excessive resource usage
-    
-    if DEBUG_MODE:
-        print("\nCurrent Configuration:")
-        print(json.dumps(config, indent=2))
-        print(f"\nUsing {len(OLLAMA_INSTANCES)} Ollama instances with {NUM_WORKERS} workers")
-        for i, instance in enumerate(OLLAMA_INSTANCES):
-            print(f"Instance {i+1}: {instance['url']} ({instance['model']})")
-    
-    # Process the input path
-    input_path = args.input
-    
-    # Print basic information about the tool
-    print("PDF Author Extraction Tool with Advanced Features")
-    print("============================================")
-    print(f"Processing: {input_path}")
-    print(f"Output file: {OUTPUT_CSV_FILENAME}")
-    print(f"Using {len(OLLAMA_INSTANCES)} Ollama instances with {NUM_WORKERS} workers")
-    print("============================================")
-    
-    # Process input based on type (file or directory)
-    if os.path.isfile(input_path):
-        process_file(input_path, OUTPUT_CSV_FILENAME)
-    elif os.path.isdir(input_path):
-        process_folder(input_path, OUTPUT_CSV_FILENAME)
+            print("Warning: No Ollama instances detected. Using default from config.")
+            OLLAMA_INSTANCES = [{
+                "url": CONFIG.get("ollama", {}).get("fallback_api_url", "http://localhost:11434/api/generate"),
+                "model": CONFIG.get("ollama", {}).get("model", "gemma3:27b")
+            }]
     else:
-        print(f"Error: Input path '{input_path}' does not exist.")
-    
+         OLLAMA_INSTANCES = [{
+            "url": CONFIG.get("ollama", {}).get("fallback_api_url", "http://localhost:11434/api/generate"),
+            "model": CONFIG.get("ollama", {}).get("model", "gemma3:27b")
+        }]
+
+    NUM_WORKERS = min(len(OLLAMA_INSTANCES), CONFIG.get("execution",{}).get("num_workers", 4), len(pdf_files_to_process))
+    if NUM_WORKERS == 0 and OLLAMA_INSTANCES: NUM_WORKERS = 1 # Ensure at least one worker if instances exist
+
+    print(f"\n--- Analyst Report Vision - Author Extraction ---")
+    print(f"Processing {len(pdf_files_to_process)} PDF file(s). Outputting to: {output_csv_path}")
+    print(f"Using {len(OLLAMA_INSTANCES)} Ollama instance(s) with {NUM_WORKERS} worker thread(s).")
+    if DEBUG_MODE:
+        for i, instance in enumerate(OLLAMA_INSTANCES):
+            print(f"  Instance {i+1}: {instance['url']} (Model: {instance['model']})")
+    print("-"*50 + "\n")
+
+    csv_write_lock = threading.Lock() if NUM_WORKERS > 1 else None
+
+    if NUM_WORKERS > 1:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
+            futures = {}
+            for i, pdf_file in enumerate(pdf_files_to_process):
+                instance_details = OLLAMA_INSTANCES[i % len(OLLAMA_INSTANCES)]
+                futures[executor.submit(extract_authors_from_pdf, pdf_file, instance_details)] = pdf_file
+            
+            for future in concurrent.futures.as_completed(futures):
+                original_pdf_file = futures[future]
+                try:
+                    _, authors = future.result()
+                    if authors:
+                        write_to_csv(output_csv_path, original_pdf_file, authors, csv_write_lock)
+                        print(f"Processed '{os.path.basename(original_pdf_file)}': {len(authors)} author(s) extracted.")
+                    else:
+                        print(f"Processed '{os.path.basename(original_pdf_file)}': No authors found.")
+                except Exception as e:
+                    print(f"Error processing {original_pdf_file}: {e}")
+                    traceback.print_exc()
+                print("-"*30)
+    else: # Sequential processing
+        for i, pdf_file in enumerate(pdf_files_to_process):
+            instance_details = OLLAMA_INSTANCES[i % len(OLLAMA_INSTANCES)] if OLLAMA_INSTANCES else None
+            if not instance_details:
+                print("Error: No Ollama instance available for sequential processing. Exiting.")
+                break
+            try:
+                _, authors = extract_authors_from_pdf(pdf_file, instance_details)
+                if authors:
+                    write_to_csv(output_csv_path, pdf_file, authors)
+                    print(f"Processed '{os.path.basename(pdf_file)}': {len(authors)} author(s) extracted.")
+                else:
+                    print(f"Processed '{os.path.basename(pdf_file)}': No authors found.")
+            except Exception as e:
+                print(f"Error processing {pdf_file}: {e}")
+                traceback.print_exc()
+            print("-"*30)
+
+    print(f"\nProcessing complete. Results saved to {output_csv_path}")
     # Additional configuration info shown only if not already displayed in debug mode
     if not DEBUG_MODE:
         print(f"Using Ollama Model: {OLLAMA_MODEL}")
         
-        if PAGES_TO_PROCESS_PER_PDF is None or PAGES_TO_PROCESS_PER_PDF <= 0:
-            print("Processing all pages in each PDF")
+        page_mode_cfg = PAGE_PROCESSING_CONFIG.get("mode", "all")
+        print(f"Page processing mode: '{page_mode_cfg}'")
+        if page_mode_cfg == "first_n":
+            first_n_cfg = PAGE_PROCESSING_CONFIG.get("first_n", 0)
+            print(f"  - Configured to process first N pages: {first_n_cfg if first_n_cfg > 0 else 'All (or as per first_n value 0)'}")
+        elif page_mode_cfg == "range":
+            range_cfg = PAGE_PROCESSING_CONFIG.get("range", [1,1])
+            print(f"  - Configured to process page range: {range_cfg[0]}-{range_cfg[1]}")
+        
+        if PAGE_PROCESSING_CONFIG.get("always_include_first", True):
+            print("  - Always including the first page is enabled.")
         else:
-            print(f"Processing the first {PAGES_TO_PROCESS_PER_PDF} pages in each PDF")
+            print("  - Always including the first page is disabled.")
 
 if __name__ == "__main__":
     main()
