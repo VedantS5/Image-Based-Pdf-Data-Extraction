@@ -1,6 +1,6 @@
 {
     "input": {
-        "directory": "./input_pdfs"
+        "directory": "/N/project/fads_ng/analyst_reports_project/data/analyst_reports_pdf"
     },
     "ollama": {
       "fallback_api_url": "http://localhost:11434/api/generate",
@@ -19,11 +19,11 @@
       "image_scale": 2.0
     },
     "output": {
-        "directory": "./output_csvs",
-        "csv_filename": "author_extraction_results.csv"
+        "directory": "/N/project/fads_ng/analyst_reports_project/data/csv_reports",
+        "csv_filename": "author_extraction_results_vision.csv"
     },
     "execution": {
-        "max_files": 0,
+        "max_files": 10,
         "skip_processed_files": true
     },
     "parsing": {
