@@ -20,7 +20,8 @@
     },
     "output": {
         "directory": "/N/project/fads_ng/analyst_reports_project/data/csv_reports",
-        "csv_filename": "author_extraction_results_vision.csv"
+        "csv_filename": "author_extraction_results_vision.csv",
+        "csv_layout": "wide"
     },
     "execution": {
         "max_files": 10,
