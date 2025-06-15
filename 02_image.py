@@ -1102,6 +1102,15 @@ def extract_authors_from_pdf(pdf_path):
         traceback.print_exc()
         return []
 
+def get_csv_layout():
+    """Return desired CSV layout ('wide' or 'long'). Defaults to 'wide'."""
+    # CONFIG is loaded at runtime in main(), fall back to wide if not yet defined
+    try:
+        return CONFIG.get("output", {}).get("csv_layout", "wide").lower()
+    except (NameError, AttributeError):
+        return "wide"
+
+
 def determine_max_authors_columns(output_csv_path, current_run_authors_count):
     """Determine maximum number of author sets (name, title, email) needed for CSV columns."""
     max_sets = max(5, current_run_authors_count) 
@@ -1119,6 +1128,76 @@ def determine_max_authors_columns(output_csv_path, current_run_authors_count):
     return max_sets
 
 def write_to_csv(output_csv_path: str, pdf_file: str, authors: List[Dict], lock: Optional[threading.Lock] = None):
+    """Write author data to CSV in either 'wide' or 'long' layout as defined in config.
+
+    wide layout  -> one row per PDF with dynamic author_* columns
+    long layout  -> one row per author with fixed columns
+    """
+    layout = get_csv_layout()
+
+    # Ensure parent directory exists
+    os.makedirs(os.path.dirname(output_csv_path), exist_ok=True)
+
+    try:
+        if lock:
+            lock.acquire()
+
+        file_exists = os.path.isfile(output_csv_path)
+        file_is_empty = (not file_exists) or (os.path.getsize(output_csv_path) == 0)
+
+        if layout == "long":
+            fieldnames = [
+                "PDF File Path",
+                "Author Name",
+                "Author Email",
+                "Author Title"
+            ]
+            with open(output_csv_path, "a", newline="", encoding="utf-8") as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                if file_is_empty:
+                    writer.writeheader()
+                for author_data in authors:
+                    writer.writerow({
+                        "PDF File Path": pdf_file,
+                        "Author Name": author_data.get("name", ""),
+                        "Author Email": author_data.get("email", ""),
+                        "Author Title": author_data.get("title", "")
+                    })
+        else:  # wide (default)
+            max_sets = determine_max_authors_columns(output_csv_path, len(authors))
+            # Build dynamic fieldnames
+            fieldnames = ["PDF File Path"]
+            for i in range(1, max_sets + 1):
+                fieldnames.extend([
+                    f"author_{i}_name",
+                    f"author_{i}_title",
+                    f"author_{i}_email"
+                ])
+            with open(output_csv_path, "a", newline="", encoding="utf-8") as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                if file_is_empty:
+                    writer.writeheader()
+
+                # Prepare a single row representing the PDF
+                row = {"PDF File Path": pdf_file}
+                for i in range(1, max_sets + 1):
+                    if i <= len(authors):
+                        author = authors[i - 1]
+                        row[f"author_{i}_name"] = author.get("name", "")
+                        row[f"author_{i}_title"] = author.get("title", "")
+                        row[f"author_{i}_email"] = author.get("email", "")
+                    else:
+                        row[f"author_{i}_name"] = ""
+                        row[f"author_{i}_title"] = ""
+                        row[f"author_{i}_email"] = ""
+                writer.writerow(row)
+    except Exception as e:
+        print(f"Error writing to CSV {output_csv_path}: {e}")
+    finally:
+        if lock and lock.locked():
+            lock.release()
+
+    return
     """Append author data to the CSV file. Assumes header is already written."""
     try:
         if lock:
@@ -1466,19 +1545,7 @@ def main():
             print(f"Error creating output directory {final_output_dir}: {e}")
             sys.exit(1)
 
-    # Initialize CSV file with header if it doesn't exist or is empty
-    file_exists = os.path.isfile(output_csv_path)
-    if not file_exists or os.path.getsize(output_csv_path) == 0:
-        try:
-            with open(output_csv_path, 'w', newline='', encoding='utf-8') as csvfile:
-                fieldnames = ['PDF File Path', 'Author Name', 'Author Email', 'Author Title', 'Page Number', 'Extraction Method', 'Raw LLM Output']
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                writer.writeheader()
-            if DEBUG_MODE:
-                print(f"Initialized CSV header in {output_csv_path}")
-        except IOError as e:
-            print(f"Error initializing CSV file {output_csv_path}: {e}")
-            sys.exit(1)
+
 
     # Get already processed files from output CSV if skipping
     processed_files_set = set()
