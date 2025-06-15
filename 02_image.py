@@ -1147,7 +1147,7 @@ def write_to_csv(output_csv_path: str, pdf_file: str, authors: List[Dict], lock:
 
         if layout == "long":
             fieldnames = [
-                "PDF File Path",
+                "filename",
                 "Author Name",
                 "Author Email",
                 "Author Title"
@@ -1158,7 +1158,7 @@ def write_to_csv(output_csv_path: str, pdf_file: str, authors: List[Dict], lock:
                     writer.writeheader()
                 for author_data in authors:
                     writer.writerow({
-                        "PDF File Path": os.path.basename(pdf_file),
+                        "filename": os.path.basename(pdf_file),
                         "Author Name": author_data.get("name", ""),
                         "Author Email": author_data.get("email", ""),
                         "Author Title": author_data.get("title", "")
@@ -1166,7 +1166,7 @@ def write_to_csv(output_csv_path: str, pdf_file: str, authors: List[Dict], lock:
         else:  # wide (default)
             max_sets = determine_max_authors_columns(output_csv_path, len(authors))
             # Build dynamic fieldnames
-            fieldnames = ["PDF File Path"]
+            fieldnames = ["filename"]
             for i in range(1, max_sets + 1):
                 fieldnames.extend([
                     f"author_{i}_name",
@@ -1179,7 +1179,7 @@ def write_to_csv(output_csv_path: str, pdf_file: str, authors: List[Dict], lock:
                     writer.writeheader()
 
                 # Prepare a single row representing the PDF
-                row = {"PDF File Path": os.path.basename(pdf_file)}
+                row = {"filename": os.path.basename(pdf_file)}
                 for i in range(1, max_sets + 1):
                     if i <= len(authors):
                         author = authors[i - 1]
