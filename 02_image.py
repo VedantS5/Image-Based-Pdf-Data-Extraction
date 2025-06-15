@@ -1158,7 +1158,7 @@ def write_to_csv(output_csv_path: str, pdf_file: str, authors: List[Dict], lock:
                     writer.writeheader()
                 for author_data in authors:
                     writer.writerow({
-                        "PDF File Path": pdf_file,
+                        "PDF File Path": os.path.basename(pdf_file),
                         "Author Name": author_data.get("name", ""),
                         "Author Email": author_data.get("email", ""),
                         "Author Title": author_data.get("title", "")
@@ -1179,7 +1179,7 @@ def write_to_csv(output_csv_path: str, pdf_file: str, authors: List[Dict], lock:
                     writer.writeheader()
 
                 # Prepare a single row representing the PDF
-                row = {"PDF File Path": pdf_file}
+                row = {"PDF File Path": os.path.basename(pdf_file)}
                 for i in range(1, max_sets + 1):
                     if i <= len(authors):
                         author = authors[i - 1]
@@ -1209,7 +1209,7 @@ def write_to_csv(output_csv_path: str, pdf_file: str, authors: List[Dict], lock:
             # Header is assumed to be written by main() when initializing the file
             for author_data in authors:
                 writer.writerow({
-                    'PDF File Path': pdf_file,
+                    'PDF File Path': os.path.basename(pdf_file),
                     'Author Name': author_data.get('name', ''),
                     'Author Email': author_data.get('email', ''),
                     'Author Title': author_data.get('title', ''),
@@ -1398,8 +1398,8 @@ def get_processed_files(csv_path):
             for row in reader:
                 if row and len(row) > 0:
                     # First column should be the file path
-                    file_path = row[0]
-                    processed_files.add(os.path.abspath(file_path))
+                    file_path = os.path.basename(row[0])
+                    processed_files.add(file_path)
                     
         print(f"Found {len(processed_files)} previously processed files in {csv_path}")
     except Exception as e:
@@ -1556,7 +1556,7 @@ def main():
     pending_processing = []
     if SKIP_PROCESSED_FILES and processed_files_set:
         for f_path in pdf_files_to_process:
-            if os.path.abspath(f_path) not in processed_files_set:
+            if os.path.basename(f_path) not in processed_files_set:
                 pending_processing.append(f_path)
         if DEBUG_MODE:
             print(f"Filtered out {len(pdf_files_to_process) - len(pending_processing)} already processed files.")
